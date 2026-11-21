@@ -1,4 +1,4 @@
-name: Build unsigned IPA from ZIP
+name: Build Snow Cheats unsigned IPA from source ZIP
 
 on:
   workflow_dispatch:
@@ -28,8 +28,8 @@ jobs:
 
       - name: Extract source ZIP
         env:
-          SOURCE_ZIP: LuccheseStore-3106-CodeMagic.zip
-          SOURCE_DIR: ${{ runner.temp }}/lucchese-source
+          SOURCE_ZIP: SnowCheats-3106-CodeMagic.zip
+          SOURCE_DIR: ${{ runner.temp }}/snowcheats-source
         run: |
           set -euo pipefail
 
@@ -134,7 +134,7 @@ jobs:
 
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
-          IPA="$RUNNER_TEMP/LuccheseStore-3106-${VERSION}-${BUILD}-unsigned.ipa"
+          IPA="$RUNNER_TEMP/SnowCheats-3106-${VERSION}-${BUILD}-unsigned.ipa"
 
           rm -rf "$PACKAGE_DIR" "$IPA"
           mkdir -p "$PACKAGE_DIR/Payload"
@@ -142,7 +142,7 @@ jobs:
 
           # Create the archive from the directory containing Payload. This
           # guarantees Payload/3106.app at the archive root, without an extra
-          # Payload/Payload or lucchese-package/Payload directory level.
+          # Payload/Payload or intermediate-directory/Payload directory level.
           (
             cd "$PACKAGE_DIR"
             /usr/bin/zip -qry "$IPA" Payload
@@ -167,5 +167,5 @@ jobs:
           TAG="unsigned-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" "$IPA_PATH" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "LuccheseStore 3106 unsigned IPA #${GITHUB_RUN_NUMBER}" \
-            --notes "Unsigned IPA generated from LuccheseStore-3106-CodeMagic.zip."
+            --title "Snow Cheats 3106 unsigned IPA #${GITHUB_RUN_NUMBER}" \
+            --notes "Unsigned IPA generated from SnowCheats-3106-CodeMagic.zip."
