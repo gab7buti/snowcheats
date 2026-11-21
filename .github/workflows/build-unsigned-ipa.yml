@@ -1,0 +1,171 @@
+name: Build unsigned IPA from ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 3106
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unsigned-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Extract ZIP and build unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Extract source ZIP
+        env:
+          SOURCE_ZIP: LuccheseStore-3106-CodeMagic.zip
+          SOURCE_DIR: ${{ runner.temp }}/lucchese-source
+        run: |
+          set -euo pipefail
+
+          ZIP_PATH="$GITHUB_WORKSPACE/$SOURCE_ZIP"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "ERROR: arquivo obrigatório não encontrado na raiz do repositório: $SOURCE_ZIP" >&2
+            echo "Arquivos ZIP encontrados:" >&2
+            find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -iname '*.zip' -print >&2 || true
+            exit 1
+          fi
+
+          echo "ZIP encontrado: $ZIP_PATH"
+          rm -rf "$SOURCE_DIR"
+          mkdir -p "$SOURCE_DIR"
+          unzip -tq "$ZIP_PATH"
+          unzip -q "$ZIP_PATH" -d "$SOURCE_DIR"
+
+          PROJECT_PATH="$(find "$SOURCE_DIR" -maxdepth 8 -type d -name 'ThreeOneOSSix.xcodeproj' -print -quit)"
+          if [ -z "$PROJECT_PATH" ]; then
+            echo "ERROR: ThreeOneOSSix.xcodeproj não foi encontrado dentro de $SOURCE_ZIP" >&2
+            find "$SOURCE_DIR" -maxdepth 5 -type d -name '*.xcodeproj' -print >&2 || true
+            exit 1
+          fi
+
+          SOURCE_ROOT="$(dirname "$PROJECT_PATH")"
+          echo "SOURCE_ROOT=$SOURCE_ROOT" >> "$GITHUB_ENV"
+          echo "PROJECT_PATH=$PROJECT_PATH" >> "$GITHUB_ENV"
+          echo "Fonte extraída em: $SOURCE_ROOT"
+
+      - name: Apply SDK compatibility fallback
+        run: |
+          set -euo pipefail
+          CONTENT_VIEW="$SOURCE_ROOT/ThreeOneOSSix/ContentView.swift"
+          if [ ! -f "$CONTENT_VIEW" ]; then
+            echo "ERROR: ContentView.swift não foi encontrado em $SOURCE_ROOT" >&2
+            exit 1
+          fi
+
+          python3 - "$CONTENT_VIEW" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          old = "content.background { shape.fill(.clear).glassEffect(.regular, in: shape) }"
+          new = "content.background(shape.fill(fallback))"
+          if old not in text:
+              raise SystemExit("glassEffect compatibility target was not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          print("Applied Xcode 16-compatible glass surface fallback")
+          PY
+
+      - name: Show Xcode and project
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcode-select -p
+          xcodebuild -version
+          xcodebuild -list -project "$PROJECT_PATH"
+
+      - name: Run policy tests from ZIP
+        run: |
+          set -euo pipefail
+          if [ -x "$SOURCE_ROOT/Tests/run_policy_tests.sh" ]; then
+            bash "$SOURCE_ROOT/Tests/run_policy_tests.sh"
+          else
+            echo "Aviso: testes não encontrados no ZIP; continuando com o build."
+          fi
+
+      - name: Build unsigned iOS app
+        env:
+          DERIVED_DATA: ${{ runner.temp }}/ThreeOneOSSix-DerivedData
+        run: |
+          set -euo pipefail
+          rm -rf "$DERIVED_DATA"
+          xcodebuild \
+            -project "$PROJECT_PATH" \
+            -scheme 3106 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            build
+
+      - name: Package unsigned IPA
+        env:
+          DERIVED_DATA: ${{ runner.temp }}/ThreeOneOSSix-DerivedData
+          PACKAGE_DIR: ${{ runner.temp }}/ThreeOneOSSix-Package
+        run: |
+          set -euo pipefail
+
+          APP="$DERIVED_DATA/Build/Products/Release-iphoneos/3106.app"
+          if [ ! -d "$APP" ]; then
+            echo "ERROR: o app não foi encontrado em $APP" >&2
+            find "$DERIVED_DATA" -maxdepth 8 -type d -name '*.app' -print >&2 || true
+            exit 1
+          fi
+
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
+          IPA="$RUNNER_TEMP/LuccheseStore-3106-${VERSION}-${BUILD}-unsigned.ipa"
+
+          rm -rf "$PACKAGE_DIR" "$IPA"
+          mkdir -p "$PACKAGE_DIR/Payload"
+          cp -R "$APP" "$PACKAGE_DIR/Payload/3106.app"
+
+          # Create the archive from the directory containing Payload. This
+          # guarantees Payload/3106.app at the archive root, without an extra
+          # Payload/Payload or lucchese-package/Payload directory level.
+          (
+            cd "$PACKAGE_DIR"
+            /usr/bin/zip -qry "$IPA" Payload
+          )
+
+          unzip -tq "$IPA"
+          echo "IPA contents:"
+          unzip -Z1 "$IPA" | sed -n '1,30p'
+          unzip -Z1 "$IPA" | grep -q '^Payload/[^/][^/]*/Info.plist$'
+          if unzip -Z1 "$IPA" | grep -q '^Payload/Payload/'; then
+            echo "ERROR: IPA contains an extra Payload directory level" >&2
+            exit 1
+          fi
+          shasum -a 256 "$IPA"
+          echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
+
+      - name: Publish original IPA as GitHub Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="unsigned-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" "$IPA_PATH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "LuccheseStore 3106 unsigned IPA #${GITHUB_RUN_NUMBER}" \
+            --notes "Unsigned IPA generated from LuccheseStore-3106-CodeMagic.zip."
