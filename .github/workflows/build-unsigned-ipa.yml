@@ -62,7 +62,9 @@ jobs:
       - name: Prepare native Liquid Glass or compatible material
         run: |
           set -euo pipefail
-          XCODE_VERSION="$(xcodebuild -version | awk '/^Xcode / { print $2; exit }')"
+          XCODE_OUTPUT="$(xcodebuild -version)"
+          XCODE_VERSION="${XCODE_OUTPUT%%$'\n'*}"
+          XCODE_VERSION="${XCODE_VERSION#Xcode }"
           XCODE_MAJOR="${XCODE_VERSION%%.*}"
           CONTENT_VIEW="$SOURCE_ROOT/ThreeOneOSSix/ContentView.swift"
           if [ ! -f "$CONTENT_VIEW" ]; then
