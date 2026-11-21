@@ -125,10 +125,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          APP="$DERIVED_DATA/Build/Products/Release-iphoneos/3106.app"
+          APP="$DERIVED_DATA/Build/Products/Release-iphoneos/snow.app"
           if [ ! -d "$APP" ]; then
             echo "ERROR: o app não foi encontrado em $APP" >&2
             find "$DERIVED_DATA" -maxdepth 8 -type d -name '*.app' -print >&2 || true
+            exit 1
+          fi
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          if [ "$EXECUTABLE" != "snow" ] || [ ! -x "$APP/snow" ]; then
+            echo "ERROR: esperava o executável snow dentro de snow.app, encontrei '$EXECUTABLE'" >&2
             exit 1
           fi
 
@@ -138,10 +143,10 @@ jobs:
 
           rm -rf "$PACKAGE_DIR" "$IPA"
           mkdir -p "$PACKAGE_DIR/Payload"
-          cp -R "$APP" "$PACKAGE_DIR/Payload/3106.app"
+          cp -R "$APP" "$PACKAGE_DIR/Payload/snow.app"
 
           # Create the archive from the directory containing Payload. This
-          # guarantees Payload/3106.app at the archive root, without an extra
+          # guarantees Payload/snow.app at the archive root, without an extra
           # Payload/Payload or intermediate-directory/Payload directory level.
           (
             cd "$PACKAGE_DIR"
@@ -152,6 +157,7 @@ jobs:
           echo "IPA contents:"
           unzip -Z1 "$IPA" | sed -n '1,30p'
           unzip -Z1 "$IPA" | grep -q '^Payload/[^/][^/]*/Info.plist$'
+          unzip -Z1 "$IPA" | grep -q '^Payload/snow.app/snow$'
           if unzip -Z1 "$IPA" | grep -q '^Payload/Payload/'; then
             echo "ERROR: IPA contains an extra Payload directory level" >&2
             exit 1
